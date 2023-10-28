@@ -4,14 +4,14 @@
 #define I2S_SAMPLE_BITS I2S_BITS_PER_SAMPLE_16BIT
 #define I2S_CHANNEL_NUM 2
 #define I2S_DMA_BUF_COUNT 8
-#define I2S_DMA_BUF_LEN 512
+#define I2S_DMA_BUF_LEN 1024
 #define I2S_WS 15
 #define I2S_SD 13
 #define I2S_SCK 2
 
-#define BUFFER_SIZE 512
+#define BUFFER_SIZE I2S_DMA_BUF_LEN
 
-int32_t dataBuf[BUFFER_SIZE] = {0};
+int16_t dataBuf[BUFFER_SIZE] = {0};
 
 void setup()
 {
@@ -22,11 +22,11 @@ void setup()
       .sample_rate = SAMPLE_RATE,
       .bits_per_sample = I2S_SAMPLE_BITS,
       .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-      .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_LSB),
+      .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
       .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
       .dma_buf_count = I2S_DMA_BUF_COUNT,
       .dma_buf_len = I2S_DMA_BUF_LEN,
-      .use_apll = false,
+      .use_apll = true,
   };
   // I2S pinout
   i2s_pin_config_t pin_config = {
@@ -45,7 +45,7 @@ void loop()
   // Serial.println(bytesRead);
   for (int i = 0; i < BUFFER_SIZE; i++)
   {
-    Serial.write(dataBuf[i]);
+    Serial.println(dataBuf[i]);
     // Serial.println(dataBuf[i]);
   }
 }
