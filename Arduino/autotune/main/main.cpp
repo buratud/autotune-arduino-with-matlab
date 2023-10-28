@@ -16,13 +16,16 @@
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
+#include "lwip/sockets.h"
 
-#define EXAMPLE_ESP_WIFI_SSID      "SSID"
-#define EXAMPLE_ESP_WIFI_PASS      "PASSWORD"
-#define EXAMPLE_ESP_MAXIMUM_RETRY  5
+#define BROADCAST_PORT 8080
+
+#define EXAMPLE_ESP_WIFI_SSID "SSID"
+#define EXAMPLE_ESP_WIFI_PASS "PASSWORD"
+#define EXAMPLE_ESP_MAXIMUM_RETRY 5
 #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
 #define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
+#define WIFI_FAIL_BIT BIT1
 
 #define I2S_SAMPLE_BITS I2S_DATA_BIT_WIDTH_24BIT
 #define I2S_SAMPLE_BITS_WIDTH I2S_SLOT_BIT_WIDTH_AUTO
@@ -35,18 +38,21 @@
 
 static EventGroupHandle_t s_wifi_event_group;
 
-static const char *TAG = "wifi station";
+static const char *WIFI_TAG = "wifi station";
+static const char *SOCKET_TAG = "socket";
 
 static int s_retry_num = 0;
-
 
 int32_t dataBuf[BUFFER_SIZE] = {0};
 bool available = false;
 esp_event_loop_handle_t loop_handle;
+int sock;
+struct sockaddr_in broadcast_addr;
 
 void start_i2s();
 void register_event();
 void connect_wifi();
+void create_socket();
 static int32_t int32to24(int32_t number)
 {
     number >>= 8;
@@ -63,9 +69,14 @@ static int32_t int32to24(int32_t number)
 
 void bufferFilled(void *handler_arg, esp_event_base_t base, int32_t id, void *event_data)
 {
-    for (int i = 0; i < BUFFER_SIZE; i++)
+     int send_result = sendto(sock, dataBuf, sizeof(dataBuf), 0, (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
+    if (send_result < 0)
     {
-        // printf("%" PRId32 "\n", int32to24(dataBuf[i]));
+        ESP_LOGE(SOCKET_TAG, "Failed to send UDP broadcast with error code: %d", send_result);
+        perror("sendto");
+        // Handle the error
+    } else {
+        ESP_LOGI(SOCKET_TAG, "Send with size of: %u", sizeof(dataBuf));
     }
 }
 
@@ -73,6 +84,7 @@ IRAM_ATTR bool i2s_rx_queue_received_callback(i2s_chan_handle_t handle, i2s_even
 {
     memcpy(dataBuf, event->data, event->size);
     available = true;
+   
     TEST_ESP_OK(esp_event_isr_post("Filled", 1, NULL, 0U, NULL));
     return false;
 }
@@ -89,6 +101,7 @@ extern "C" void app_main()
     register_event();
     connect_wifi();
     start_i2s();
+    create_socket();
 }
 
 void start_i2s()
@@ -152,38 +165,48 @@ void register_event()
     TEST_ESP_OK(esp_event_handler_register("Filled", 1, bufferFilled, NULL));
 }
 
-static void event_handler(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data)
+static void event_handler(void *arg, esp_event_base_t event_base,
+                          int32_t event_id, void *event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
         esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY)
+        {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
-        } else {
+            ESP_LOGI(WIFI_TAG, "retry to connect to the AP");
+        }
+        else
+        {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
-        ESP_LOGI(TAG,"connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(WIFI_TAG, "connect to the AP fail");
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+    {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(WIFI_TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
 
-void connect_wifi() {
-      esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+void connect_wifi()
+{
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
-     s_wifi_event_group = xEventGroupCreate();
+    ESP_LOGI(WIFI_TAG, "ESP_WIFI_MODE_STA");
+    s_wifi_event_group = xEventGroupCreate();
 
     ESP_ERROR_CHECK(esp_netif_init());
 
@@ -220,29 +243,56 @@ void connect_wifi() {
             },
         },
     };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK(esp_wifi_start() );
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "wifi_init_sta finished.");
+    ESP_LOGI(WIFI_TAG, "wifi_init_sta finished.");
 
     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
      * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
+                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                           pdFALSE,
+                                           pdFALSE,
+                                           portMAX_DELAY);
 
     /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
      * happened. */
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "connected to ap SSID: %s",
+    if (bits & WIFI_CONNECTED_BIT)
+    {
+        ESP_LOGI(WIFI_TAG, "connected to ap SSID: %s",
                  EXAMPLE_ESP_WIFI_SSID);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(TAG, "Failed to connect to SSID: %s,",
+    }
+    else if (bits & WIFI_FAIL_BIT)
+    {
+        ESP_LOGI(WIFI_TAG, "Failed to connect to SSID: %s,",
                  EXAMPLE_ESP_WIFI_SSID);
-    } else {
-        ESP_LOGE(TAG, "UNEXPECTED EVENT");
+    }
+    else
+    {
+        ESP_LOGE(WIFI_TAG, "UNEXPECTED EVENT");
+    }
+}
+
+void create_socket()
+{
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    memset(&broadcast_addr, 0, sizeof(broadcast_addr));
+    broadcast_addr.sin_family = AF_INET;
+    broadcast_addr.sin_port = htons(BROADCAST_PORT);
+    broadcast_addr.sin_addr.s_addr = inet_addr("192.168.1.255");
+    if (sock < 0)
+    {
+        ESP_LOGE(SOCKET_TAG, "Failed to create socket");
+        close(sock);
+        return;
+    }
+    int enableBroadcast = 1;
+    if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &enableBroadcast, sizeof(enableBroadcast)) < 0)
+    {
+        ESP_LOGE(SOCKET_TAG, "Failed to set sock options: errno %d", errno);
+        close(sock);
+        return;
     }
 }
