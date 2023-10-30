@@ -29,7 +29,7 @@
 
 #define I2S_SAMPLE_BITS I2S_DATA_BIT_WIDTH_24BIT
 #define I2S_SAMPLE_BITS_WIDTH I2S_SLOT_BIT_WIDTH_AUTO
-#define SAMPLE_RATE 16000
+#define SAMPLE_RATE 24000
 #define I2S_WS GPIO_NUM_15
 #define I2S_SD GPIO_NUM_13
 #define I2S_SCK GPIO_NUM_2
@@ -40,73 +40,64 @@ static EventGroupHandle_t s_wifi_event_group;
 
 static const char *WIFI_TAG = "wifi station";
 static const char *SOCKET_TAG = "socket";
-
 static int s_retry_num = 0;
 
-int32_t dataBuf[BUFFER_SIZE] = {0};
-bool available = false;
-esp_event_loop_handle_t loop_handle;
 int sock;
 struct sockaddr_in broadcast_addr;
 
+i2s_chan_handle_t rx_handle;
+int32_t dataBuf[BUFFER_SIZE] = {0};
+size_t readsize;
+
 void start_i2s();
-void register_event();
 void connect_wifi();
 void create_socket();
-static int32_t int32to24(int32_t number)
-{
-    number >>= 8;
-    if ((number >> 23) & 1)
-    {
-        number |= 0xFF000000;
-    }
-    else
-    {
-        number &= 0x00FFFFFF;
-    }
-    return number;
-}
+void register_loop();
 
-void bufferFilled(void *handler_arg, esp_event_base_t base, int32_t id, void *event_data)
+void vTaskCode(void *pvParameters)
 {
-     int send_result = sendto(sock, dataBuf, sizeof(dataBuf), 0, (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
-    if (send_result < 0)
+    for (;;)
     {
-        ESP_LOGE(SOCKET_TAG, "Failed to send UDP broadcast with error code: %d", send_result);
-        perror("sendto");
-        // Handle the error
-    } else {
-        ESP_LOGI(SOCKET_TAG, "Send with size of: %u", sizeof(dataBuf));
+        i2s_channel_read(rx_handle, dataBuf, sizeof(dataBuf), &readsize, portMAX_DELAY);
+        int send_result = sendto(sock, dataBuf, readsize, 0, (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
+        if (send_result < 0)
+        {
+            ESP_LOGE(SOCKET_TAG, "Failed to send UDP broadcast with error code: %d", send_result);
+            perror("sendto");
+        }
+        else
+        {
+            ESP_LOGI(SOCKET_TAG, "Send with size of: %u, read: %u", sizeof(dataBuf), readsize);
+        }
     }
 }
 
-IRAM_ATTR bool i2s_rx_queue_received_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)
-{
-    memcpy(dataBuf, event->data, event->size);
-    available = true;
-   
-    TEST_ESP_OK(esp_event_isr_post("Filled", 1, NULL, 0U, NULL));
-    return false;
-}
-
-IRAM_ATTR bool i2s_rx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)
-{
-    // printf("Crashed\n");
-    return false;
-}
+// void bufferFilled(void *handler_arg, esp_event_base_t base, int32_t id, void *event_data)
+// {
+//     int send_result = sendto(sock, dataBuf, read2, 0, (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
+//     if (send_result < 0)
+//     {
+//         ESP_LOGE(SOCKET_TAG, "Failed to send UDP broadcast with error code: %d", send_result);
+//         perror("sendto");
+//     }
+//     else
+//     {
+//         ESP_LOGI(SOCKET_TAG, "Send with size of: %u, read: %u", sizeof(dataBuf), read2);
+//     }
+// }
 
 extern "C" void app_main()
 {
     TEST_ESP_OK(uart_set_baudrate(UART_NUM_0, 921600));
-    register_event();
+    TEST_ESP_OK(esp_event_loop_create_default());
     connect_wifi();
-    start_i2s();
     create_socket();
+    start_i2s();
+    register_loop();
 }
 
 void start_i2s()
 {
-    i2s_chan_handle_t rx_handle;
     i2s_chan_config_t chan_cfg = {
         .id = I2S_NUM_0,
         .role = I2S_ROLE_MASTER,
@@ -119,7 +110,7 @@ void start_i2s()
     i2s_std_config_t std_cfg = {
         .clk_cfg = {
             .sample_rate_hz = SAMPLE_RATE,
-            .clk_src = I2S_CLK_SRC_DEFAULT,
+            .clk_src = I2S_CLK_SRC_APLL,
             .mclk_multiple = I2S_MCLK_MULTIPLE_384,
         },
         .slot_cfg = {
@@ -148,21 +139,24 @@ void start_i2s()
 
     TEST_ESP_OK(i2s_channel_init_std_mode(rx_handle, &std_cfg));
 
-    i2s_event_callbacks_t cbs = {
-        .on_recv = i2s_rx_queue_received_callback,
-        .on_recv_q_ovf = i2s_rx_queue_overflow_callback,
-        .on_sent = NULL,
-        .on_send_q_ovf = NULL,
-    };
-
-    TEST_ESP_OK(i2s_channel_register_event_callback(rx_handle, &cbs, NULL));
     TEST_ESP_OK(i2s_channel_enable(rx_handle));
 }
 
-void register_event()
+void register_loop()
 {
-    TEST_ESP_OK(esp_event_loop_create_default());
-    TEST_ESP_OK(esp_event_handler_register("Filled", 1, bufferFilled, NULL));
+    TaskHandle_t xHandle = NULL;
+
+    // Create the task, storing the handle.  Note that the passed parameter ucParameterToPass
+    // must exist for the lifetime of the task, so in this case is declared static.  If it was just an
+    // an automatic stack variable it might no longer exist, or at least have been corrupted, by the time
+    // the new task attempts to access it.
+    xTaskCreate(vTaskCode, "NAME", 2048, NULL, 1U, &xHandle);
+    configASSERT(xHandle);
+    // Use the handle to delete the task.
+    // if (xHandle != NULL)
+    // {
+    //     vTaskDelete(xHandle);
+    // }
 }
 
 static void event_handler(void *arg, esp_event_base_t event_base,
