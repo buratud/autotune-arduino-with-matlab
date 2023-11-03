@@ -1,0 +1,5 @@
+
+udpObject = udpport("datagram",LocalHost="192.168.1.124",LocalPort=8080,EnablePortSharing=true)
+udpObject.NumDatagramsAvailable
+data = read(udpObject,udpObject.NumDatagramsAvailable,"uint32")
+

@@ -1,14 +1,11 @@
-udpObject = udpport("datagram","IPV4",LocalHost="192.168.1.124",LocalPort=8080);
-start(udpObject);
-disp('UDP Port started.');
+
+udpObject = udpport("datagram",LocalHost="192.168.1.124",LocalPort=8080,EnablePortSharing=true)
 try
     while true
-        dataReceived = receive(udpObject);
-        % Process the received data here
-        disp(['Received data: ', char(dataReceived)]);
+        udpObject.NumDatagramsAvailable
+        data = read(udpObject,udpObject.NumDatagramsAvailable,"uint32")
+        
     end
 catch
-    stop(udpObject);
-    delete(udpObject);
     disp('UDP Port stopped and deleted.');
 end
