@@ -1,4 +1,4 @@
-udpObject = udpport("datagram","IPV4",LocalHost="192.168.1.255",LocalPort=8080);
+udpObject = udpport("datagram","IPV4",LocalHost="192.168.1.124",LocalPort=8080);
 start(udpObject);
 disp('UDP Port started.');
 try
