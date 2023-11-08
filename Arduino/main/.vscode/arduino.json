@@ -1,8 +1,0 @@
-{
-    "sketch": "main.ino",
-    "configuration": "FlashFreq=80,PartitionScheme=no_ota,CPUFreq=40,UploadSpeed=921600,DebugLevel=none,EraseFlash=none",
-    "board": "esp32:esp32:lolin32-lite",
-    "port": "COM15",
-    "programmer": "esptool",
-    "output": ".out"
-}
